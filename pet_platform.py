@@ -92,6 +92,8 @@ class PetMessageEvent(AstrMessageEvent):
         "bind_host": "127.0.0.1",
         "bind_port": 6199,
         "pet_ids": ["main"],
+        "event_buffer_size": 256,
+        "whisper_provider_id": "",
     },
 )
 class PetPlatform(Platform):
@@ -99,6 +101,8 @@ class PetPlatform(Platform):
         super().__init__(platform_config, event_queue)
         self.config = platform_config
         self.settings = platform_settings
+        # 插件上下文由 Star 插件注入；缺失时碎碎念必须回结构化错误，而不是抛异常。
+        self.context = None
         self._stop = asyncio.Event()
         self._runner: web.AppRunner | None = None
         self.outbox = Outbox(
@@ -106,6 +110,10 @@ class PetPlatform(Platform):
         )
         self.deduper = RequestDeduper()
         self._sessions: dict[str, float] = {}
+
+    def set_context(self, context) -> None:
+        """注入 Star 插件持有的 AstrBot Context，供碎碎念调用 provider。"""
+        self.context = context
 
     def meta(self) -> PlatformMetadata:
         return PlatformMetadata(
@@ -139,6 +147,14 @@ class PetPlatform(Platform):
         prompt = str(body.get("prompt", "")).strip()
         if not prompt:
             return {"error": {"code": "bad-request", "message": "prompt 为空"}}
+        if self.context is None:
+            # 插件尚未完成 context 注入（或热重载竞态）：回 502，不把 AttributeError 抛成 500。
+            return {
+                "error": {
+                    "code": "generate-error",
+                    "message": "碎碎念服务未就绪",
+                }
+            }
         provider = await resolve_whisper_provider(
             self.context, str(self.config.get("whisper_provider_id", ""))
         )

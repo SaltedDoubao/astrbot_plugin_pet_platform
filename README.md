@@ -33,6 +33,8 @@
 | `bind_host` | string | `127.0.0.1` | HTTP 监听地址；默认只监听本机 |
 | `bind_port` | int | `6199` | HTTP 监听端口 |
 | `pet_ids` | list | `["main"]` | 允许的 `petId` 白名单；不在名单内返回 403 |
+| `event_buffer_size` | int | `256` | SSE 环形缓冲大小 |
+| `whisper_provider_id` | string | 空 | 碎碎念使用的 provider；留空回退当前会话 provider |
 
 ### 插件配置 schema（`_conf_schema.json`）
 
@@ -46,7 +48,7 @@
 | `event_buffer_size` | int | `256` | SSE 环形缓冲大小 |
 | `whisper_provider_id` | string | 空 | 碎碎念使用的 provider；留空回退当前会话 provider |
 
-注意：HTTP 服务实际读取的是「平台」页保存的 `platform_config`；`_conf_schema.json` 是插件级设置 schema。当前平台的 `default_config_tmpl` 只包含 `enable`/`token`/`bind_host`/`bind_port`/`pet_ids`，`event_buffer_size` 与 `whisper_provider_id` 使用代码默认值，或手工加入平台配置 JSON 后才会生效。
+注意：HTTP 服务实际读取的是「平台」页保存的 `platform_config`；`_conf_schema.json` 是插件级设置 schema，两边字段含义一致。`event_buffer_size` 与 `whisper_provider_id` 已包含在平台的 `default_config_tmpl` 中，可直接在「平台」页配置。
 
 > `token` 只是桌宠与本插件之间的桥接令牌，**不是** AstrBot OpenAPI、Dashboard 或 WebUI 的登录凭据，也不要与它们复用同一个值。
 
@@ -119,7 +121,7 @@ curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/js
 
 - 碎碎念直接调用 `context.llm_generate()`，不构造 AstrBot 事件、不进入对话管线，因此 **不会把 prompt 写入对话记忆（会话历史）**。
 - `petId` 不在白名单返回 403；`prompt` 为空返回 400；provider 不可用或生成失败返回 502。
-- **已知问题（2026-10-25 实测）**：当前版本在本地 AstrBot 4.29 环境中（真实 `PetPlatform` 进程内启动）调用本端点返回 HTTP 500，服务端日志为 `AttributeError: 'PetPlatform' object has no attribute 'context'`。原因是 AstrBot 的 `Platform` 基类不提供 `context`，而插件没有把 Star 的 context 传给平台实例；失败发生在 provider 解析之前。`forbidden-pet` 与空 `prompt` 校验分支正常。修复前不要把碎碎念接入生产。
+- 插件会在插件加载、AstrBot 就绪以及每次平台加载完成时把 AstrBot `Context` 注入平台实例。若注入尚未完成（如平台实例刚创建或热重载竞态），本端点返回 502 `{"error":{"code":"generate-error","message":"碎碎念服务未就绪"}}`，而不是 500；通常稍后重试即可。
 
 ## 一次对话的事件序列
 
@@ -146,4 +148,4 @@ notify completed       # after_message_sent：{"event":"notify","kind":"complete
 
 ## 当前验收状态
 
-2026-10-25 在本地 AstrBot 4.29.0-beta.2 环境用真实 `PetPlatform` + 真实 aiohttp 服务完成了 `/v1/health`、`/v1/events`、`/v1/send`、`/v1/sessions`、去重与 `terminate()` 的进程内验收；未接入真实 LLM provider，`reply` 帧由测试脚本手工调用 `event.send()` 注入。完整 WebUI 安装、真实模型对话与真实碎碎念仍待有 provider 的 AstrBot 实例补验。
+2026-10-25 在本地 AstrBot 4.29.0-beta.2 环境用真实 `PetPlatform` + 真实 aiohttp 服务完成了 `/v1/health`、`/v1/events`、`/v1/send`、`/v1/sessions`、去重与 `terminate()` 的进程内验收；`/v1/whisper` 已验证：无 context 时返回结构化 502，注入 context + 模拟 provider 后返回 200。未接入真实 LLM provider，`reply` 帧由测试脚本手工调用 `event.send()` 注入。完整 WebUI 安装、真实模型对话与真实碎碎念仍待有 provider 的 AstrBot 实例补验。

@@ -35,10 +35,17 @@ class PetPlatformPlugin(Star):
     def _bind_platform(self) -> None:
         for instance in self._platform_instances():
             self.emitter.bind(instance)
+            # 平台实例不继承 Star，必须显式注入 context 才能调用 provider（碎碎念）。
+            instance.set_context(self.context)
 
     @filter.on_astrbot_loaded()
     async def on_astrbot_loaded(self):
         # 平台实例可能在插件加载之后才创建；就绪后再绑定一次。
+        self._bind_platform()
+
+    @filter.on_platform_loaded()
+    async def on_platform_loaded(self):
+        # WebUI 保存平台配置会重建实例；重建后补注入 context 与 emitter。
         self._bind_platform()
 
     @filter.on_llm_request()
