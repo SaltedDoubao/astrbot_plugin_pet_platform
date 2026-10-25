@@ -148,6 +148,10 @@ class PetPlatform(Platform):
         logger.info("dsh_pet platform started; waiting for stop")
         await self._stop.wait()
 
+    async def terminate(self) -> None:
+        """停止平台运行循环。HTTP 服务清理由后续任务补全。"""
+        self._stop.set()
+
     async def send_by_session(self, session, message_chain):
         logger.info("send_by_session: %s", session)
         await super().send_by_session(session, message_chain)
