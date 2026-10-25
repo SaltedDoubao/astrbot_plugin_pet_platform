@@ -71,7 +71,28 @@ def test_subscriber_overflow_emits_resync():
         for i in range(3):
             outbox.append({"event": "reply", "text": str(i)})
         records = [await asyncio.wait_for(queue.get(), timeout=1) for _ in range(2)]
-        assert any(r["event"] == "resync" for r in records)
+        resyncs = [r for r in records if r["event"] == "resync"]
+        assert len(resyncs) == 1
+        # resync 的 seq=0 是缺口哨兵，不能被客户端当成续传点位。
+        assert resyncs[0]["reason"] == "overflow"
+        assert resyncs[0]["seq"] == 0
         unsubscribe()
 
     asyncio.run(scenario())
+
+
+def test_replay_resyncs_when_since_ahead_of_head():
+    # 插件重载后 seq 归零，而客户端仍持有旧的 Last-Event-ID；
+    # 此时不能静默返回空列表，必须要求客户端重建。
+    outbox = Outbox(buffer_size=8)
+    outbox.append({"event": "reply", "text": "a"})
+    outbox.append({"event": "reply", "text": "b"})
+    records = outbox.replay(99)
+    assert records == [
+        {"event": "resync", "petId": "", "reason": "buffer-gap", "seq": 0}
+    ]
+
+
+def test_replay_empty_outbox_is_empty():
+    outbox = Outbox(buffer_size=8)
+    assert outbox.replay(0) == []

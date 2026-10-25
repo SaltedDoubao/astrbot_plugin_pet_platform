@@ -32,7 +32,8 @@ class Outbox:
                         "event": "resync",
                         "petId": record.get("petId", ""),
                         "reason": "overflow",
-                        "seq": self._seq,
+                        # 缺口哨兵：seq=0 明确表示“不可作为续传点位”。
+                        "seq": 0,
                     }
                 )
                 continue
@@ -41,6 +42,12 @@ class Outbox:
         return self._seq
 
     def replay(self, since: int) -> list[dict[str, Any]]:
+        # 插件重载后 seq 归零，而客户端可能仍持有旧 Last-Event-ID；
+        # 此时不能静默返回空，否则后续事件会被当成“已收到”而丢失。
+        if since > self._seq:
+            return [
+                {"event": "resync", "petId": "", "reason": "buffer-gap", "seq": 0},
+            ]
         records = [dict(record) for record in self._buffer if record["seq"] > since]
         # since 早于缓冲区最旧 seq 的前一条，说明中间有缺口，先补一条 resync。
         if self._buffer and since < self._buffer[0]["seq"] - 1:
