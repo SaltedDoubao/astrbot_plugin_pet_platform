@@ -17,12 +17,27 @@ class RequestDeduper:
         self._now = now
         self._seen: dict[tuple[str, str], float] = {}
 
-    def first_seen(self, pet_id: str, request_id: str) -> bool:
-        """首次见到返回 True；TTL 内重复返回 False；过期记录先清理。"""
-        now = self._now()
+    def _purge(self, now: float) -> None:
         expired = [key for key, at in self._seen.items() if now - at > self._ttl]
         for key in expired:
             self._seen.pop(key, None)
+
+    def is_seen(self, pet_id: str, request_id: str) -> bool:
+        """只查询 TTL 内是否已记录，不写入；过期记录先清理。"""
+        now = self._now()
+        self._purge(now)
+        return (pet_id, request_id) in self._seen
+
+    def remember(self, pet_id: str, request_id: str) -> None:
+        """登记一次已处理请求；调用方应在事件提交成功后再调用。"""
+        now = self._now()
+        self._purge(now)
+        self._seen[(pet_id, request_id)] = now
+
+    def first_seen(self, pet_id: str, request_id: str) -> bool:
+        """首次见到返回 True；TTL 内重复返回 False；过期记录先清理。"""
+        now = self._now()
+        self._purge(now)
         key = (pet_id, request_id)
         if key in self._seen:
             return False
