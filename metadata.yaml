@@ -4,4 +4,4 @@ desc: 让 dsh-pet 桌宠作为独立平台接入 AstrBot
 short_desc: 让 dsh-pet 桌宠作为独立平台接入 AstrBot
 version: 0.1.0
 author: dsh-pet
-astrbot_version: ">=4.16,<5"
+astrbot_version: ">=4.29,<5"
