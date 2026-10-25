@@ -63,3 +63,43 @@ async def test_message_send_pushes_reply_event(monkeypatch):
     assert replies == [
         {"event": "reply", "petId": "main", "requestId": "r1", "text": "回复", "seq": 1}
     ]
+
+
+async def test_streaming_send_pushes_single_reply(monkeypatch):
+    """流式结果必须聚合成恰好一条回复，不能因为基类不消费生成器而丢失。"""
+    pytest.importorskip("astrbot.api.event")
+    monkeypatch.setenv("ASTRBOT_DISABLE_METRICS", "1")
+
+    from astrbot.api.event import MessageChain
+    from astrbot.api.message_components import Plain
+    from astrbot.api.platform import PlatformMetadata
+
+    from astrbot_plugin_pet_platform.pet_message import build_message
+    from astrbot_plugin_pet_platform.pet_outbox import Outbox
+    from astrbot_plugin_pet_platform.pet_platform import PetMessageEvent
+
+    class FakePlatform:
+        def __init__(self):
+            self.outbox = Outbox()
+
+    platform = FakePlatform()
+    event = PetMessageEvent(
+        "你好",
+        build_message("main", "r1", "你好"),
+        PlatformMetadata(name="dsh_pet", description="test", id="dsh_pet"),
+        "main",
+        platform,
+    )
+
+    async def chunks():
+        yield MessageChain([Plain(text="你")])
+        yield None
+        yield MessageChain([Plain(text="好呀")])
+
+    await event.send_streaming(chunks())
+    await asyncio.sleep(0)
+
+    replies = [e for e in platform.outbox.replay(0) if e.get("event") == "reply"]
+    assert replies == [
+        {"event": "reply", "petId": "main", "requestId": "r1", "text": "你好呀", "seq": 1}
+    ]

@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import AsyncGenerator
 
 from astrbot.api.event import AstrMessageEvent, MessageChain
 from astrbot.api.platform import (
@@ -37,11 +38,11 @@ class PetMessageEvent(AstrMessageEvent):
         platform: "PetPlatform",
     ):
         super().__init__(message_str, message_obj, platform_meta, session_id)
-        self.platform = platform
+        self.pet_platform = platform
 
     async def send(self, message: MessageChain) -> None:
         text = chain_to_text(list(getattr(message, "chain", [])))
-        self.platform.outbox.append(
+        self.pet_platform.outbox.append(
             reply_event(
                 self.session.session_id,
                 getattr(self.message_obj, "message_id", ""),
@@ -49,6 +50,25 @@ class PetMessageEvent(AstrMessageEvent):
             )
         )
         await super().send(message)
+
+    async def send_streaming(
+        self,
+        generator: AsyncGenerator[MessageChain | None, None],
+        use_fallback: bool = False,
+    ) -> None:
+        """把流式结果整段回传。
+
+        AstrBot 4.29 基类 send_streaming 只上传指标、不消费生成器；
+        本平台不支持真实流式，必须自行聚合，否则回复会丢失。
+        """
+        parts: list[str] = []
+        async for chain in generator:
+            if chain is not None:
+                parts.append(chain_to_text(list(getattr(chain, "chain", []))))
+        text = "".join(parts)
+        if text:
+            await self.send(MessageChain().message(text))
+        await super().send_streaming(generator, use_fallback)
 
 
 @register_platform_adapter(
@@ -81,6 +101,9 @@ class PetPlatform(Platform):
             name="dsh_pet",
             description="dsh-pet desktop pet platform",
             id="dsh_pet",
+            # 只回传整段回复；不声明真实流式，避免管线走平台未实现的流式路径。
+            support_streaming_message=False,
+            support_proactive_message=True,
         )
 
     async def handle_send(self, pet_id: str, request_id: str, text: str) -> None:
