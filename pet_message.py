@@ -35,13 +35,13 @@ class RequestDeduper:
         self._seen[(pet_id, request_id)] = now
 
     def first_seen(self, pet_id: str, request_id: str) -> bool:
-        """首次见到返回 True；TTL 内重复返回 False；过期记录先清理。"""
-        now = self._now()
-        self._purge(now)
-        key = (pet_id, request_id)
-        if key in self._seen:
+        """首次见到返回 True；TTL 内重复返回 False；过期记录先清理。
+
+        由 is_seen + remember 组合而成，行为与一次性查询登记等价。
+        """
+        if self.is_seen(pet_id, request_id):
             return False
-        self._seen[key] = now
+        self.remember(pet_id, request_id)
         return True
 
 

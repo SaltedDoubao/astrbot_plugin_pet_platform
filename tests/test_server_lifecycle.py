@@ -4,6 +4,7 @@
 """
 import asyncio
 
+import pytest
 from aiohttp import ClientSession, web
 
 from astrbot_plugin_pet_platform.pet_auth import AuthConfig
@@ -50,3 +51,53 @@ def test_app_can_start_and_stop_on_random_port():
             await runner.cleanup()
 
     asyncio.run(scenario())
+
+
+async def test_platform_run_serves_then_terminate_closes_port():
+    """PetPlatform.run() 真正托管 HTTP；terminate() 后清空 runner 并释放端口。"""
+    pytest.importorskip("astrbot.api.platform")
+
+    from astrbot_plugin_pet_platform.pet_platform import PetPlatform
+
+    platform = PetPlatform(
+        {
+            "token": "t",
+            "pet_ids": ["main"],
+            "bind_host": "127.0.0.1",
+            "bind_port": 0,
+        },
+        {},
+        asyncio.Queue(),
+    )
+    task = asyncio.create_task(platform.run())
+    try:
+        # 端口由系统分配：等 runner 报告监听地址后再发请求。
+        port = 0
+        for _ in range(100):
+            addresses = platform._runner.addresses if platform._runner else []
+            if addresses:
+                port = addresses[0][1]
+                break
+            await asyncio.sleep(0.05)
+        assert port > 0
+
+        async with ClientSession() as session:
+            async with session.get(
+                f"http://127.0.0.1:{port}/v1/health",
+                headers={"Authorization": "Bearer t"},
+            ) as response:
+                assert response.status == 200
+                assert (await response.json())["platformId"] == "dsh_pet"
+
+        await platform.terminate()
+        await asyncio.wait_for(task, timeout=5)
+        assert platform._runner is None
+        # 服务已停止：同一端口不再接受连接。
+        with pytest.raises(OSError):
+            await asyncio.wait_for(
+                asyncio.open_connection("127.0.0.1", port), timeout=2
+            )
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
