@@ -22,7 +22,7 @@ from astrbot.api.platform import (
 from .pet_frames import chain_to_text, reply_event
 from .pet_message import RequestDeduper, build_message
 from .pet_outbox import Outbox
-from .pet_whisper import whisper_prompt
+from .pet_whisper import resolve_whisper_provider, whisper_prompt
 
 logger = logging.getLogger("astrbot_plugin_pet_platform")
 
@@ -124,7 +124,16 @@ class PetPlatform(Platform):
         prompt = str(body.get("prompt", "")).strip()
         if not prompt:
             return {"error": {"code": "bad-request", "message": "prompt 为空"}}
-        provider = str(self.config.get("whisper_provider_id", ""))
+        provider = await resolve_whisper_provider(
+            self.context, str(self.config.get("whisper_provider_id", ""))
+        )
+        if not provider:
+            return {
+                "error": {
+                    "code": "generate-error",
+                    "message": "未配置可用的碎碎念服务商",
+                }
+            }
         return await whisper_prompt(
             self.context, str(body.get("systemPrompt", "")), prompt, provider
         )
