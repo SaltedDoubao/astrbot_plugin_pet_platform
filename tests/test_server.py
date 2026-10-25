@@ -6,6 +6,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from astrbot_plugin_pet_platform.pet_auth import AuthConfig
 from astrbot_plugin_pet_platform.pet_outbox import Outbox
+from astrbot_plugin_pet_platform.pet_ratelimit import RateLimiter
 from astrbot_plugin_pet_platform.pet_server import create_app
 
 TOKEN = "test-token"
@@ -125,6 +126,45 @@ async def test_send_requires_token(client):
     assert platform.sent == []
 
 
+async def test_send_rate_limited_after_limit():
+    platform = FakePlatform()
+    app = create_app(platform, CONFIG, RateLimiter(limit=2, window_sec=60))
+    async with TestClient(TestServer(app)) as http:
+        for index in range(2):
+            response = await http.post(
+                "/v1/send",
+                headers=AUTH,
+                json={"petId": "main", "requestId": f"r{index}", "text": "你好"},
+            )
+            assert response.status == 202
+        limited = await http.post(
+            "/v1/send",
+            headers=AUTH,
+            json={"petId": "main", "requestId": "r3", "text": "你好"},
+        )
+        assert limited.status == 429
+        assert (await limited.json()) == {
+            "error": {"code": "rate-limited", "message": "请求过于频繁"}
+        }
+        assert len(platform.sent) == 2
+
+
+async def test_whisper_rate_limited_after_limit():
+    platform = FakePlatform()
+    app = create_app(platform, CONFIG, RateLimiter(limit=1, window_sec=60))
+    async with TestClient(TestServer(app)) as http:
+        first = await http.post(
+            "/v1/whisper", headers=AUTH, json={"petId": "main", "prompt": "hi"}
+        )
+        assert first.status == 200
+        limited = await http.post(
+            "/v1/whisper", headers=AUTH, json={"petId": "main", "prompt": "hi"}
+        )
+        assert limited.status == 429
+        assert (await limited.json())["error"]["code"] == "rate-limited"
+        assert len(platform.whispered) == 1
+
+
 async def test_whisper_returns_text(client):
     http, platform = client
     response = await http.post(
@@ -155,6 +195,21 @@ async def test_whisper_rejects_non_dict_body_without_calling_platform(client):
         response = await http.post("/v1/whisper", headers=AUTH, json=body)
         assert response.status == 400
         assert (await response.json())["error"]["code"] == "bad-request"
+    assert platform.whispered == []
+
+
+async def test_whisper_rejects_overlong_prompt(client):
+    http, platform = client
+    response = await http.post(
+        "/v1/whisper",
+        headers=AUTH,
+        json={"petId": "main", "prompt": "x" * 32769},
+    )
+    assert response.status == 400
+    assert (await response.json())["error"] == {
+        "code": "bad-request",
+        "message": "prompt 超长",
+    }
     assert platform.whispered == []
 
 

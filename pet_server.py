@@ -14,6 +14,9 @@ from aiohttp import web
 
 from .pet_auth import AuthConfig, AuthResult, check_auth, validate_send
 from .pet_outbox import Outbox
+from .pet_ratelimit import RateLimiter
+
+WHISPER_PROMPT_MAX = 32768
 
 
 class PetPlatformLike(Protocol):
@@ -31,12 +34,19 @@ class PetPlatformLike(Protocol):
 # 类型化 AppKey：避免字符串键拼写错误，也消除 aiohttp 的 NotAppKeyWarning。
 PLATFORM_KEY: web.AppKey[PetPlatformLike] = web.AppKey("platform", PetPlatformLike)
 AUTH_KEY: web.AppKey[AuthConfig] = web.AppKey("auth", AuthConfig)
+RATE_LIMIT_KEY: web.AppKey[RateLimiter] = web.AppKey("rate_limiter", RateLimiter)
 
 
-def create_app(platform: PetPlatformLike, config: AuthConfig) -> web.Application:
+def create_app(
+    platform: PetPlatformLike,
+    config: AuthConfig,
+    rate_limiter: RateLimiter | None = None,
+) -> web.Application:
     app = web.Application()
     app[PLATFORM_KEY] = platform
     app[AUTH_KEY] = config
+    # 可注入：测试用极小限额，生产用默认 30 次/60 秒。
+    app[RATE_LIMIT_KEY] = rate_limiter or RateLimiter()
     app.router.add_get("/v1/health", health)
     app.router.add_get("/v1/sessions", sessions)
     app.router.add_post("/v1/send", send)
@@ -52,6 +62,16 @@ def _auth(request: web.Request) -> AuthResult:
 def _unauthorized(auth: AuthResult) -> web.Response:
     # 保持 spec §9.1 的形状，并保留具体 code（如 server-token-empty）。
     return web.json_response({"error": {"code": auth.code or "unauthorized"}}, status=401)
+
+
+def _rate_limited() -> web.Response:
+    return web.json_response(
+        {"error": {"code": "rate-limited", "message": "请求过于频繁"}}, status=429
+    )
+
+
+def _allow(request: web.Request, key: str) -> bool:
+    return request.app[RATE_LIMIT_KEY].allow(key)
 
 
 async def health(request: web.Request) -> web.Response:
@@ -81,6 +101,8 @@ async def send(request: web.Request) -> web.Response:
         # 未知 pet 是权限问题（403），请求体结构问题才是 400。
         status = 400 if auth.code == "bad-request" else 403
         return web.json_response({"ok": False, "error": auth.code}, status=status)
+    if not _allow(request, parsed["petId"]):
+        return _rate_limited()
     await request.app[PLATFORM_KEY].handle_send(
         parsed["petId"], parsed["requestId"], parsed["text"]
     )
@@ -103,6 +125,12 @@ async def whisper(request: web.Request) -> web.Response:
             {"error": {"code": "bad-request", "message": "请求体必须是 JSON 对象"}},
             status=400,
         )
+    if len(str(body.get("prompt", ""))) > WHISPER_PROMPT_MAX:
+        return web.json_response(
+            {"error": {"code": "bad-request", "message": "prompt 超长"}}, status=400
+        )
+    if not _allow(request, str(body.get("petId", ""))):
+        return _rate_limited()
     result = await request.app[PLATFORM_KEY].handle_whisper(body)
     if not isinstance(result, dict):
         return web.json_response(

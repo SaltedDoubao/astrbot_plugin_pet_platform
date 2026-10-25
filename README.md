@@ -5,6 +5,7 @@
 - 平台 ID / 适配器名：`dsh_pet`
 - 最低 AstrBot 版本：`4.29.0b2`（见 `metadata.yaml`，要求 `>=4.29.0b2,<5`）
 - 运行依赖：`aiohttp>=3.9`（见 `requirements.txt`）
+- v1 **不声明主动消息**：`meta().support_proactive_message=False`，`send_by_session()` 是防御性 no-op（只记固定日志，不写入发件箱）。AstrBot 不会向模型提供主动消息工具，任何“主动推送”都不会送达桌宠。
 
 ## 安装
 
@@ -120,8 +121,18 @@ curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/js
 ```
 
 - 碎碎念直接调用 `context.llm_generate()`，不构造 AstrBot 事件、不进入对话管线，因此 **不会把 prompt 写入对话记忆（会话历史）**。
-- `petId` 不在白名单返回 403；`prompt` 为空返回 400；provider 不可用或生成失败返回 502。
+- `petId` 不在白名单返回 403；`prompt` 为空或超过 32768 字符返回 400；provider 不可用或生成失败返回 502。
 - 插件会在插件加载、AstrBot 就绪以及每次平台加载完成时把 AstrBot `Context` 注入平台实例。若注入尚未完成（如平台实例刚创建或热重载竞态），本端点返回 502 `{"error":{"code":"generate-error","message":"碎碎念服务未就绪"}}`，而不是 500；通常稍后重试即可。
+
+### 限流
+
+`/v1/send` 与 `/v1/whisper` 共用按 `petId` 计的内存限流：每个 `petId` 每 60 秒最多 30 次请求。超限返回 HTTP 429：
+
+```json
+{"error": {"code": "rate-limited", "message": "请求过于频繁"}}
+```
+
+限流只覆盖这两个入站端点，不影响 `/v1/health`、`/v1/events`、`/v1/sessions`。
 
 ## 一次对话的事件序列
 
@@ -139,6 +150,18 @@ notify completed       # after_message_sent：{"event":"notify","kind":"complete
 
 说明：AstrBot 的 respond 阶段先调用 `event.send()` 回传回复，随后才触发 `after_message_sent`，所以 `reply` 通常出现在最后一条 `success`/`notify` 之前；`success` 出现两次是正常现象。若没有可用 LLM provider，`/v1/send` 仍会返回 202，但不会产生 `reply`。
 
+只有最终文本会产生 `reply`。工具调用（`tool_call`）、工具直出（`tool_direct_result`）、推理链（`reasoning`）与流式分段（`break`）都会被忽略，避免桌宠提前按 `requestId` 结束请求、丢掉真正的答案。
+
+模型调用失败（`response.role == "err"`）时不会出现 `reply` 或 `success`，而是：
+
+```text
+status error           # {"event":"status","state":"error"}
+error                  # {"event":"error","code":"llm-error","message":"模型调用失败","requestId":"r1"}
+notify error           # {"event":"notify","kind":"error"}
+```
+
+`error` 帧带 `requestId` 时，桌宠应立即以该 `requestId` 结束等待，不必等到超时。
+
 ## 安全建议
 
 - 默认只绑定 `127.0.0.1`，不要直接暴露到公网。
@@ -148,4 +171,4 @@ notify completed       # after_message_sent：{"event":"notify","kind":"complete
 
 ## 当前验收状态
 
-2026-10-25 在本地 AstrBot 4.29.0-beta.2 环境用真实 `PetPlatform` + 真实 aiohttp 服务完成了 `/v1/health`、`/v1/events`、`/v1/send`、`/v1/sessions`、去重与 `terminate()` 的进程内验收；`/v1/whisper` 已验证：无 context 时返回结构化 502，注入 context + 模拟 provider 后返回 200。未接入真实 LLM provider，`reply` 帧由测试脚本手工调用 `event.send()` 注入。完整 WebUI 安装、真实模型对话与真实碎碎念仍待有 provider 的 AstrBot 实例补验。
+2026-10-25 在本地 AstrBot 4.29.0-beta.2 环境用真实 `PetPlatform` + 真实 aiohttp 服务完成了 `/v1/health`、`/v1/events`、`/v1/send`、`/v1/sessions`、去重、限流与 `terminate()` 的进程内验收；`/v1/whisper` 已验证：无 context 时返回结构化 502，注入 context + 模拟 provider 后返回 200。未接入真实 LLM provider，`reply` 帧由测试脚本手工调用 `event.send()` 注入。完整 WebUI 安装、真实模型对话、真实碎碎念与主动消息禁用行为仍待有 provider 的 AstrBot 实例补验。

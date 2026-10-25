@@ -71,11 +71,11 @@ class PetPlatformPlugin(Star):
 
     @filter.on_llm_response()
     async def on_llm_response(self, event, response=None):
-        self.emitter.emit("on_llm_response", event)
+        self.emitter.emit("on_llm_response", event, response=response)
 
     @filter.on_agent_done()
     async def on_agent_done(self, event, run_context=None, response=None):
-        self.emitter.emit("on_agent_done", event)
+        self.emitter.emit("on_agent_done", event, response=response)
 
     @filter.after_message_sent()
     async def after_message_sent(self, event):

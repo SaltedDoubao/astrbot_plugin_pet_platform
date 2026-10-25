@@ -24,10 +24,21 @@ from .pet_auth import AuthConfig
 from .pet_frames import chain_to_text, reply_event
 from .pet_message import RequestDeduper, build_message
 from .pet_outbox import Outbox
+from .pet_ratelimit import RateLimiter
 from .pet_server import create_app
 from .pet_whisper import resolve_whisper_provider, whisper_prompt
 
 logger = logging.getLogger("astrbot_plugin_pet_platform")
+
+# 工具调用、工具直出、推理链与流式分段都不是最终回复；
+# 若把它们的文本当 reply 回传，桌宠会提前按 requestId 结束请求并丢掉真正答案。
+_NON_REPLY_CHAIN_TYPES = frozenset(
+    {"tool_call", "tool_direct_result", "reasoning", "break"}
+)
+
+
+def _is_reply_chain(message) -> bool:
+    return getattr(message, "type", None) not in _NON_REPLY_CHAIN_TYPES
 
 
 class PetMessageEvent(AstrMessageEvent):
@@ -45,6 +56,8 @@ class PetMessageEvent(AstrMessageEvent):
         self.pet_platform = platform
 
     async def send(self, message: MessageChain) -> None:
+        if not _is_reply_chain(message):
+            return
         text = chain_to_text(list(getattr(message, "chain", [])))
         # 空回复（例如仅上报指标）不写发件箱，避免桌宠收到空文本。
         if text:
@@ -69,8 +82,8 @@ class PetMessageEvent(AstrMessageEvent):
         """
         parts: list[str] = []
         async for chain in generator:
-            # 推理链是内部过程，不能当作正文回传给桌宠。
-            if chain is None or getattr(chain, "type", None) == "reasoning":
+            # 推理/工具状态/分段链都不是正文；空链也不参与聚合。
+            if chain is None or not _is_reply_chain(chain):
                 continue
             parts.append(chain_to_text(list(getattr(chain, "chain", []))))
         text = "".join(parts)
@@ -108,6 +121,8 @@ class PetPlatform(Platform):
         self.outbox = Outbox(
             buffer_size=int(platform_config.get("event_buffer_size", 256))
         )
+        # spec §11.4：默认 30 次/60 秒，按 petId 计。
+        self.rate_limiter = RateLimiter(limit=30, window_sec=60)
         self.deduper = RequestDeduper()
         self._sessions: dict[str, float] = {}
 
@@ -122,7 +137,8 @@ class PetPlatform(Platform):
             id="dsh_pet",
             # 只回传整段回复；不声明真实流式，避免管线走平台未实现的流式路径。
             support_streaming_message=False,
-            support_proactive_message=True,
+            # v1 不实现主动消息；send_by_session 仅为防御性 no-op。
+            support_proactive_message=False,
         )
 
     async def handle_send(self, pet_id: str, request_id: str, text: str) -> None:
@@ -181,7 +197,7 @@ class PetPlatform(Platform):
             token=str(self.config.get("token", "")),
             pet_ids=frozenset(self.config.get("pet_ids", ["main"])),
         )
-        runner = web.AppRunner(create_app(self, config))
+        runner = web.AppRunner(create_app(self, config, self.rate_limiter))
         self._runner = runner
         try:
             await runner.setup()
@@ -203,5 +219,6 @@ class PetPlatform(Platform):
         self._stop.set()
 
     async def send_by_session(self, session, message_chain):
-        logger.info("send_by_session: %s", session)
-        await super().send_by_session(session, message_chain)
+        # v1 不声明主动消息（meta.support_proactive_message=False）。
+        # 这里只记固定文案，绝不向调用方宣称已送达，也不写发件箱。
+        logger.info("dsh_pet proactive send is unsupported in v1")

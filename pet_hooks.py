@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import logging
 
-from .pet_frames import notify_event, status_event
+from .pet_frames import error_event, notify_event, status_event
 from .pet_hook_map import hook_status
+from .pet_message import RequestDeduper
 
 logger = logging.getLogger("astrbot_plugin_pet_platform")
 
@@ -16,19 +17,47 @@ logger = logging.getLogger("astrbot_plugin_pet_platform")
 class PetHookEmitter:
     def __init__(self):
         self._platform = None
+        # 同一请求的 on_llm_response 与 on_agent_done 都可能看到 err；
+        # 用 TTL 去重，避免重复报错，也避免之后补发 success。
+        self._errored = RequestDeduper(ttl_sec=300)
 
     def bind(self, platform) -> None:
         self._platform = platform
 
-    def emit(self, hook: str, event, task: str | None = None) -> None:
+    @staticmethod
+    def _request_id(event) -> str:
+        return str(
+            getattr(getattr(event, "message_obj", None), "message_id", "") or ""
+        )
+
+    def emit(self, hook: str, event, task: str | None = None, response=None) -> None:
         if self._platform is None:
             return
-        state = hook_status(hook)
         umo = str(getattr(event, "unified_msg_origin", ""))
-        if state is None or not umo.startswith("dsh_pet:"):
+        if not umo.startswith("dsh_pet:"):
             return
         pet_id = getattr(getattr(event, "session", None), "session_id", None)
         if not pet_id:
+            return
+        request_id = self._request_id(event)
+        if self._errored.is_seen(pet_id, request_id):
+            # 本次请求已报错：后续钩子不得再发 success，也不重复发 error。
+            return
+        if getattr(response, "role", None) == "err":
+            self._errored.remember(pet_id, request_id)
+            try:
+                self._platform.outbox.append(status_event(pet_id, "error"))
+                if request_id:
+                    # 让桌宠用 requestId 立即结束等待，而不是等 30 秒超时。
+                    self._platform.outbox.append(
+                        error_event("llm-error", "模型调用失败", pet_id, request_id)
+                    )
+                self._platform.outbox.append(notify_event(pet_id, "error"))
+            except Exception:
+                logger.exception("emit pet error failed")
+            return
+        state = hook_status(hook)
+        if state is None:
             return
         try:
             self._platform.outbox.append(status_event(pet_id, state, task))
