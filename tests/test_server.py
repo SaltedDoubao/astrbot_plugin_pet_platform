@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
@@ -151,3 +152,50 @@ async def test_events_replays_and_streams(client):
 async def test_events_requires_token(client):
     http, _ = client
     assert (await http.get("/v1/events?since=0")).status == 401
+
+
+class ReplayRaceOutbox(Outbox):
+    """模拟回放期间并发 append。
+
+    第一条在快照前 append：既出现在回放结果里，也进入订阅队列，必须去重。
+    第二条在快照后 append：只进入订阅队列，必须补发。
+    """
+
+    def replay(self, since):
+        self.append({"event": "status", "petId": "main", "state": "overlap"})
+        records = super().replay(since)
+        self.append({"event": "status", "petId": "main", "state": "during"})
+        return records
+
+
+def _sse_frame_id(chunk: bytes) -> str:
+    for line in chunk.decode("utf-8").splitlines():
+        if line.startswith("id: "):
+            return line[len("id: ") :]
+    raise AssertionError(f"帧缺少 id 行: {chunk!r}")
+
+
+def _sse_frame_state(chunk: bytes) -> str:
+    for line in chunk.decode("utf-8").splitlines():
+        if line.startswith("data: "):
+            return json.loads(line[len("data: ") :])["state"]
+    raise AssertionError(f"帧缺少 data 行: {chunk!r}")
+
+
+async def test_events_delivers_events_arriving_during_replay_exactly_once():
+    platform = FakePlatform()
+    platform.outbox = ReplayRaceOutbox(buffer_size=8)
+    platform.outbox.append({"event": "status", "petId": "main", "state": "seed"})
+    app = create_app(platform, CONFIG)
+    async with TestClient(TestServer(app)) as http:
+        response = await http.get("/v1/events?since=0", headers=AUTH)
+        assert response.status == 200
+        frames = []
+        for _ in range(3):
+            chunk = await asyncio.wait_for(
+                response.content.readuntil(b"\n\n"), timeout=1
+            )
+            frames.append((_sse_frame_id(chunk), _sse_frame_state(chunk)))
+        # 回放的 seed 不被重复；快照内的 overlap 只出现一次；快照后的 during 被补发。
+        assert frames == [("1", "seed"), ("2", "overlap"), ("3", "during")]
+        response.close()

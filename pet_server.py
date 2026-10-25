@@ -27,10 +27,15 @@ class PetPlatformLike(Protocol):
     async def handle_whisper(self, body: dict[str, Any]) -> dict[str, Any]: ...
 
 
+# 类型化 AppKey：避免字符串键拼写错误，也消除 aiohttp 的 NotAppKeyWarning。
+PLATFORM_KEY: web.AppKey[PetPlatformLike] = web.AppKey("platform", PetPlatformLike)
+AUTH_KEY: web.AppKey[AuthConfig] = web.AppKey("auth", AuthConfig)
+
+
 def create_app(platform: PetPlatformLike, config: AuthConfig) -> web.Application:
     app = web.Application()
-    app["platform"] = platform
-    app["auth"] = config
+    app[PLATFORM_KEY] = platform
+    app[AUTH_KEY] = config
     app.router.add_get("/v1/health", health)
     app.router.add_get("/v1/sessions", sessions)
     app.router.add_post("/v1/send", send)
@@ -40,7 +45,7 @@ def create_app(platform: PetPlatformLike, config: AuthConfig) -> web.Application
 
 
 def _authorized(request: web.Request) -> bool:
-    return check_auth(request.headers, request.app["auth"]).ok
+    return check_auth(request.headers, request.app[AUTH_KEY]).ok
 
 
 def _unauthorized() -> web.Response:
@@ -56,7 +61,7 @@ async def health(request: web.Request) -> web.Response:
 async def sessions(request: web.Request) -> web.Response:
     if not _authorized(request):
         return _unauthorized()
-    return web.json_response({"sessions": request.app["platform"].sessions()})
+    return web.json_response({"sessions": request.app[PLATFORM_KEY].sessions()})
 
 
 async def send(request: web.Request) -> web.Response:
@@ -66,12 +71,12 @@ async def send(request: web.Request) -> web.Response:
         body = await request.json()
     except Exception:
         return web.json_response({"ok": False, "error": "bad-request"}, status=400)
-    parsed, auth = validate_send(body, request.app["auth"])
+    parsed, auth = validate_send(body, request.app[AUTH_KEY])
     if not auth.ok:
         # 未知 pet 是权限问题（403），请求体结构问题才是 400。
         status = 400 if auth.code == "bad-request" else 403
         return web.json_response({"ok": False, "error": auth.code}, status=status)
-    await request.app["platform"].handle_send(
+    await request.app[PLATFORM_KEY].handle_send(
         parsed["petId"], parsed["requestId"], parsed["text"]
     )
     return web.json_response({"ok": True, "requestId": parsed["requestId"]}, status=202)
@@ -86,7 +91,7 @@ async def whisper(request: web.Request) -> web.Response:
         return web.json_response(
             {"error": {"code": "bad-request", "message": "JSON 无效"}}, status=400
         )
-    result = await request.app["platform"].handle_whisper(body)
+    result = await request.app[PLATFORM_KEY].handle_whisper(body)
     status = 200 if "text" in result else 502
     return web.json_response(result, status=status)
 
@@ -98,7 +103,7 @@ async def events(request: web.Request) -> web.StreamResponse:
         since = int(request.query.get("since", "0") or "0")
     except ValueError:
         since = 0
-    outbox: Outbox = request.app["platform"].outbox
+    outbox: Outbox = request.app[PLATFORM_KEY].outbox
     response = web.StreamResponse(
         headers={
             "Content-Type": "text/event-stream",
@@ -108,16 +113,32 @@ async def events(request: web.Request) -> web.StreamResponse:
     )
     await response.prepare(request)
     try:
-        for record in outbox.replay(since):
-            await _write_sse(response, record)
+        # 先订阅再回放：回放期间到达的事件会进入队列，不会漏发；
+        # 同时在回放快照内与队列里的记录靠 last_replayed_seq 去重。
         queue, unsubscribe = outbox.subscribe()
         try:
+            replayed = outbox.replay(since)
+            last_replayed_seq = max(
+                (
+                    int(record.get("seq", 0))
+                    for record in replayed
+                    if record.get("event") != "resync"
+                ),
+                default=0,
+            )
+            for record in replayed:
+                await _write_sse(response, record)
             while True:
                 try:
                     record = await asyncio.wait_for(queue.get(), timeout=15)
                 except asyncio.TimeoutError:
                     # 注释行只保活连接，不产生事件，也不占 id。
                     await response.write(b": ping\n\n")
+                    continue
+                # resync 是重建指令，永远投递；其余记录跳过回放阶段的重复项。
+                if record.get("event") != "resync" and int(
+                    record.get("seq", 0)
+                ) <= last_replayed_seq:
                     continue
                 await _write_sse(response, record)
         finally:
