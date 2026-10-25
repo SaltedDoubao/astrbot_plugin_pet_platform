@@ -22,6 +22,23 @@ def test_check_auth_rejects_wrong_token():
     assert (result.ok, result.code) == (False, "unauthorized")
 
 
+def test_check_auth_accepts_non_ascii_token():
+    config = AuthConfig(token="桌面令牌", pet_ids=CONFIG.pet_ids)
+    result = check_auth({"Authorization": "Bearer 桌面令牌"}, config)
+    assert result.ok is True
+
+
+def test_check_auth_rejects_mismatched_header_for_non_ascii_token():
+    config = AuthConfig(token="桌面令牌", pet_ids=CONFIG.pet_ids)
+    result = check_auth({"Authorization": "Bearer secret-token"}, config)
+    assert (result.ok, result.code) == (False, "unauthorized")
+
+
+def test_check_auth_rejects_non_ascii_header_without_error():
+    result = check_auth({"Authorization": "Bearer 令牌子"}, CONFIG)
+    assert (result.ok, result.code) == (False, "unauthorized")
+
+
 def test_validate_send_accepts_valid_body():
     request, result = validate_send(
         {"petId": "main", "requestId": "r1", "text": "你好"}, CONFIG

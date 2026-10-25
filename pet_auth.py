@@ -28,7 +28,11 @@ def check_auth(headers: Mapping[str, str], config: AuthConfig) -> AuthResult:
         return AuthResult(False, "server-token-empty", "插件未配置访问令牌")
     supplied = headers.get("Authorization", "")
     expected = f"Bearer {config.token}"
-    if not hmac.compare_digest(supplied, expected):
+    # compare_digest 对含非 ASCII 字符的 str 会抛 TypeError，因此按 UTF-8 转字节比较。
+    # surrogatepass 保证任意可出现在 HTTP 头中的字符串都能编码，不会把鉴权失败变成异常。
+    supplied_bytes = supplied.encode("utf-8", "surrogatepass")
+    expected_bytes = expected.encode("utf-8")
+    if not hmac.compare_digest(supplied_bytes, expected_bytes):
         return AuthResult(False, "unauthorized", "令牌无效")
     return AuthResult(True)
 
