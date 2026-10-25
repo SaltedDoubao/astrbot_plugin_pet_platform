@@ -28,7 +28,7 @@ logger = logging.getLogger("astrbot_plugin_pet_platform")
 )
 class PetPlatform(Platform):
     def __init__(self, platform_config, platform_settings, event_queue):
-        super().__init__(event_queue)
+        super().__init__(platform_config, event_queue)
         self.config = platform_config
         self.settings = platform_settings
         self._stop = asyncio.Event()
