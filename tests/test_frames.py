@@ -20,6 +20,21 @@ class Image:
     file: str = "x.png"
 
 
+@dataclass
+class Record:
+    file: str = "x.amr"
+
+
+@dataclass
+class Video:
+    file: str = "x.mp4"
+
+
+@dataclass
+class At:
+    qq: str = "123456"
+
+
 def test_reply_and_status_frames():
     assert reply_event("main", "r1", "hi") == {
         "event": "reply",
@@ -48,3 +63,8 @@ def test_notify_and_error_frames():
 
 def test_chain_to_text_handles_text_and_media():
     assert chain_to_text([Plain("你好"), Image()]) == "你好[图片]"
+
+
+def test_chain_to_text_media_placeholders():
+    # 钉住 Record/Video 的专用占位符与未知组件按类名回退的行为。
+    assert chain_to_text([Plain("hi"), Record(), Video(), At()]) == "hi[语音][视频][At]"
