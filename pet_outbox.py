@@ -36,11 +36,19 @@ class Outbox:
                     }
                 )
                 continue
-            queue.put_nowait(record)
+            # 传副本：订阅方原地修改事件不应污染环形缓冲与后续续传。
+            queue.put_nowait(dict(record))
         return self._seq
 
     def replay(self, since: int) -> list[dict[str, Any]]:
-        return [record for record in self._buffer if record["seq"] > since]
+        records = [dict(record) for record in self._buffer if record["seq"] > since]
+        # since 早于缓冲区最旧 seq 的前一条，说明中间有缺口，先补一条 resync。
+        if self._buffer and since < self._buffer[0]["seq"] - 1:
+            return [
+                {"event": "resync", "petId": "", "reason": "buffer-gap", "seq": 0},
+                *records,
+            ]
+        return records
 
     def subscribe(self) -> tuple[asyncio.Queue[dict[str, Any]], Callable[[], None]]:
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=self._subscriber_queue_size)

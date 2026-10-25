@@ -16,7 +16,10 @@ def test_buffer_drops_oldest_when_full():
     outbox.append({"event": "reply", "text": "a"})
     outbox.append({"event": "reply", "text": "b"})
     outbox.append({"event": "reply", "text": "c"})
-    assert [e["text"] for e in outbox.replay(0)] == ["b", "c"]
+    # seq=1 已被挤出缓冲区，replay(0) 先补 resync，再返回剩余事件
+    records = outbox.replay(0)
+    assert records[0]["event"] == "resync"
+    assert [e["text"] for e in records if e["event"] == "reply"] == ["b", "c"]
 
 
 def test_subscriber_receives_new_events():
@@ -26,6 +29,35 @@ def test_subscriber_receives_new_events():
         outbox.append({"event": "reply", "text": "a"})
         record = await asyncio.wait_for(queue.get(), timeout=1)
         assert record["text"] == "a"
+        unsubscribe()
+
+    asyncio.run(scenario())
+
+
+def test_replay_prepends_resync_when_since_predates_buffer():
+    outbox = Outbox(buffer_size=3)
+    for i in range(5):
+        outbox.append({"event": "reply", "text": str(i)})
+    records = outbox.replay(0)
+    assert records[0]["event"] == "resync"
+    assert records[0]["reason"] == "buffer-gap"
+    assert [r["seq"] for r in records[1:]] == [3, 4, 5]
+    # since=4 仍能衔接缓冲区最旧 seq=3，不需要 resync
+    assert [r["seq"] for r in outbox.replay(4)] == [5]
+    assert all(r["event"] != "resync" for r in outbox.replay(4))
+
+
+def test_record_mutation_does_not_corrupt_buffer():
+    async def scenario():
+        outbox = Outbox(buffer_size=8)
+        queue, unsubscribe = outbox.subscribe()
+        outbox.append({"event": "reply", "text": "a"})
+        delivered = await asyncio.wait_for(queue.get(), timeout=1)
+        delivered["text"] = "mutated"
+        assert [e["text"] for e in outbox.replay(0)] == ["a"]
+        replayed = outbox.replay(0)
+        replayed[0]["text"] = "mutated-again"
+        assert [e["text"] for e in outbox.replay(0)] == ["a"]
         unsubscribe()
 
     asyncio.run(scenario())
