@@ -22,6 +22,7 @@ from astrbot.api.platform import (
 from .pet_frames import chain_to_text, reply_event
 from .pet_message import RequestDeduper, build_message
 from .pet_outbox import Outbox
+from .pet_whisper import whisper_prompt
 
 logger = logging.getLogger("astrbot_plugin_pet_platform")
 
@@ -114,6 +115,19 @@ class PetPlatform(Platform):
         message = build_message(pet_id, request_id, text)
         event = PetMessageEvent(text, message, self.meta(), pet_id, self)
         self.commit_event(event)
+
+    async def handle_whisper(self, body: dict) -> dict:
+        """生成碎碎念：只校验白名单与 prompt，绕开会话管线。"""
+        pet_id = str(body.get("petId", ""))
+        if pet_id not in self.config.get("pet_ids", ["main"]):
+            return {"error": {"code": "forbidden-pet", "message": "petId 不在白名单"}}
+        prompt = str(body.get("prompt", "")).strip()
+        if not prompt:
+            return {"error": {"code": "bad-request", "message": "prompt 为空"}}
+        provider = str(self.config.get("whisper_provider_id", ""))
+        return await whisper_prompt(
+            self.context, str(body.get("systemPrompt", "")), prompt, provider
+        )
 
     def sessions(self) -> list[dict]:
         return [
