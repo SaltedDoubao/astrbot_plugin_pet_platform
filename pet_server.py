@@ -1,7 +1,8 @@
 """pet 侧 HTTP + SSE 服务。
 
 只负责 HTTP 边界：鉴权、请求解析、SSE 编码；业务由平台对象注入。
-不变量：所有路由先鉴权；SSE 每帧带递增 id；心跳每 15 秒一次。
+不变量：所有路由先鉴权；SSE 每帧带递增 id；心跳每 15 秒一次；
+buffer-gap / overflow 的 resync 使用哨兵 id 0，不参与递增。
 """
 from __future__ import annotations
 
@@ -11,7 +12,7 @@ from typing import Any, Protocol
 
 from aiohttp import web
 
-from .pet_auth import AuthConfig, check_auth, validate_send
+from .pet_auth import AuthConfig, AuthResult, check_auth, validate_send
 from .pet_outbox import Outbox
 
 
@@ -44,29 +45,33 @@ def create_app(platform: PetPlatformLike, config: AuthConfig) -> web.Application
     return app
 
 
-def _authorized(request: web.Request) -> bool:
-    return check_auth(request.headers, request.app[AUTH_KEY]).ok
+def _auth(request: web.Request) -> AuthResult:
+    return check_auth(request.headers, request.app[AUTH_KEY])
 
 
-def _unauthorized() -> web.Response:
-    return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
+def _unauthorized(auth: AuthResult) -> web.Response:
+    # 保持 spec §9.1 的形状，并保留具体 code（如 server-token-empty）。
+    return web.json_response({"error": {"code": auth.code or "unauthorized"}}, status=401)
 
 
 async def health(request: web.Request) -> web.Response:
-    if not _authorized(request):
-        return _unauthorized()
+    auth = _auth(request)
+    if not auth.ok:
+        return _unauthorized(auth)
     return web.json_response({"ok": True, "platformId": "dsh_pet", "version": "0.1.0"})
 
 
 async def sessions(request: web.Request) -> web.Response:
-    if not _authorized(request):
-        return _unauthorized()
+    auth = _auth(request)
+    if not auth.ok:
+        return _unauthorized(auth)
     return web.json_response({"sessions": request.app[PLATFORM_KEY].sessions()})
 
 
 async def send(request: web.Request) -> web.Response:
-    if not _authorized(request):
-        return _unauthorized()
+    auth = _auth(request)
+    if not auth.ok:
+        return _unauthorized(auth)
     try:
         body = await request.json()
     except Exception:
@@ -83,22 +88,39 @@ async def send(request: web.Request) -> web.Response:
 
 
 async def whisper(request: web.Request) -> web.Response:
-    if not _authorized(request):
-        return _unauthorized()
+    auth = _auth(request)
+    if not auth.ok:
+        return _unauthorized(auth)
     try:
         body = await request.json()
     except Exception:
         return web.json_response(
             {"error": {"code": "bad-request", "message": "JSON 无效"}}, status=400
         )
+    # 非对象请求体（[]、"x"）在进入平台层前就拒绝，避免业务层误判字段。
+    if not isinstance(body, dict):
+        return web.json_response(
+            {"error": {"code": "bad-request", "message": "请求体必须是 JSON 对象"}},
+            status=400,
+        )
     result = await request.app[PLATFORM_KEY].handle_whisper(body)
-    status = 200 if "text" in result else 502
+    if not isinstance(result, dict):
+        return web.json_response(
+            {"error": {"code": "bad-response", "message": "平台返回非对象"}}, status=502
+        )
+    if "text" in result:
+        return web.json_response(result, status=200)
+    error = result.get("error")
+    code = error.get("code") if isinstance(error, dict) else ""
+    # 未知 pet 是权限问题，请求体问题 400，其余生成失败一律 502。
+    status = 403 if code == "forbidden-pet" else 400 if code == "bad-request" else 502
     return web.json_response(result, status=status)
 
 
 async def events(request: web.Request) -> web.StreamResponse:
-    if not _authorized(request):
-        return _unauthorized()
+    auth = _auth(request)
+    if not auth.ok:
+        return _unauthorized(auth)
     try:
         since = int(request.query.get("since", "0") or "0")
     except ValueError:

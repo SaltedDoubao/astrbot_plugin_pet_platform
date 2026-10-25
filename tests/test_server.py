@@ -46,10 +46,22 @@ async def client():
 
 async def test_health_requires_token(client):
     http, _ = client
-    assert (await http.get("/v1/health")).status == 401
+    unauthorized = await http.get("/v1/health")
+    assert unauthorized.status == 401
+    assert (await unauthorized.json()) == {"error": {"code": "unauthorized"}}
     response = await http.get("/v1/health", headers=AUTH)
     assert response.status == 200
     assert (await response.json())["platformId"] == "dsh_pet"
+
+
+async def test_unauthorized_reports_auth_code():
+    # 空令牌是配置问题，必须与普通 unauthorized 区分。
+    platform = FakePlatform()
+    app = create_app(platform, AuthConfig(token="", pet_ids=frozenset({"main"})))
+    async with TestClient(TestServer(app)) as http:
+        response = await http.get("/v1/health", headers=AUTH)
+        assert response.status == 401
+        assert (await response.json()) == {"error": {"code": "server-token-empty"}}
 
 
 async def test_sessions_lists_platform_sessions(client):
@@ -135,6 +147,32 @@ async def test_whisper_returns_502_on_platform_error(client):
     response = await http.post("/v1/whisper", headers=AUTH, json={"petId": "main", "prompt": "hi"})
     assert response.status == 502
     assert (await response.json())["error"]["code"] == "timeout"
+
+
+async def test_whisper_rejects_non_dict_body_without_calling_platform(client):
+    http, platform = client
+    for body in ([], "x", 1):
+        response = await http.post("/v1/whisper", headers=AUTH, json=body)
+        assert response.status == 400
+        assert (await response.json())["error"]["code"] == "bad-request"
+    assert platform.whispered == []
+
+
+@pytest.mark.parametrize(
+    ("code", "status"), [("forbidden-pet", 403), ("bad-request", 400), ("timeout", 502)]
+)
+async def test_whisper_maps_platform_error_codes(client, code, status):
+    http, platform = client
+
+    async def failing_whisper(body):
+        return {"error": {"code": code, "message": "x"}}
+
+    platform.handle_whisper = failing_whisper
+    response = await http.post(
+        "/v1/whisper", headers=AUTH, json={"petId": "main", "prompt": "hi"}
+    )
+    assert response.status == status
+    assert (await response.json())["error"]["code"] == code
 
 
 async def test_events_replays_and_streams(client):
