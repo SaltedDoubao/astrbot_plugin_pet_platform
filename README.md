@@ -2,6 +2,9 @@
 
 把 dsh-pet 桌宠接入 AstrBot 的独立平台插件。插件在加载时注册平台适配器 `dsh_pet`，AstrBot 侧通过 HTTP + SSE 接收桌宠消息、回传模型回复与工作状态；桌宠侧只需要一个访问令牌和 `petId`。
 
+- 仓库：<https://github.com/SaltedDoubao/astrbot_plugin_pet_platform>
+- 配套桌宠：<https://github.com/SaltedDoubao/dsh-pet>（上游：<https://github.com/PC2005-cloud/dsh-pet>）
+
 - 平台 ID / 适配器名：`dsh_pet`
 - 最低 AstrBot 版本：`4.29.0b2`（见 `metadata.yaml`，要求 `>=4.29.0b2,<5`）
 - 运行依赖：`aiohttp>=3.9`（见 `requirements.txt`）
@@ -9,7 +12,16 @@
 
 ## 安装
 
-1. 把本目录复制到 AstrBot 的 `data/plugins/astrbot_plugin_pet_platform/`。
+1. 把插件放进 AstrBot 的 `data/plugins/astrbot_plugin_pet_platform/`，任选一种：
+
+   ```bash
+   # 从 GitHub 克隆（目录名保持 astrbot_plugin_pet_platform，这是 AstrBot 的插件命名约定）
+   git clone https://github.com/SaltedDoubao/astrbot_plugin_pet_platform.git \
+     <AstrBot>/data/plugins/astrbot_plugin_pet_platform
+   ```
+
+   也可以直接复制本目录到 `data/plugins/astrbot_plugin_pet_platform/`。
+
 2. 在 AstrBot 使用的 Python 环境中安装依赖：
 
    ```bash
@@ -172,3 +184,14 @@ notify error           # {"event":"notify","kind":"error"}
 ## 当前验收状态
 
 2026-10-25 在本地 AstrBot 4.29.0-beta.2 环境用真实 `PetPlatform` + 真实 aiohttp 服务完成了 `/v1/health`、`/v1/events`、`/v1/send`、`/v1/sessions`、去重、限流与 `terminate()` 的进程内验收；`/v1/whisper` 已验证：无 context 时返回结构化 502，注入 context + 模拟 provider 后返回 200。未接入真实 LLM provider，`reply` 帧由测试脚本手工调用 `event.send()` 注入。完整 WebUI 安装、真实模型对话、真实碎碎念与主动消息禁用行为仍待有 provider 的 AstrBot 实例补验。
+
+## 开发
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+## 许可证
+
+MIT，见 [LICENSE](LICENSE)。
