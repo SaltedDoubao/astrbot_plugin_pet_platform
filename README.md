@@ -6,7 +6,7 @@
 - 配套桌宠：<https://github.com/SaltedDoubao/dsh-pet>（上游：<https://github.com/PC2005-cloud/dsh-pet>）
 
 - 平台 ID / 适配器名：`dsh_pet`
-- 最低 AstrBot 版本：`4.29.0b2`（见 `metadata.yaml`，要求 `>=4.29.0b2,<5`）
+- 最低 AstrBot 版本：`4.23.2`（见 `metadata.yaml`，要求 `>=4.23.2,<5`；`on_agent_begin` / `on_agent_done` 钩子自 4.23.2 起提供）
 - 运行依赖：`aiohttp>=3.9`（见 `requirements.txt`）
 - v1 **不声明主动消息**：`meta().support_proactive_message=False`，`send_by_session()` 是防御性 no-op（只记固定日志，不写入发件箱）。AstrBot 不会向模型提供主动消息工具，任何“主动推送”都不会送达桌宠。
 
@@ -184,6 +184,8 @@ notify error           # {"event":"notify","kind":"error"}
 ## 当前验收状态
 
 2026-10-25 在本地 AstrBot 4.29.0-beta.2 环境用真实 `PetPlatform` + 真实 aiohttp 服务完成了 `/v1/health`、`/v1/events`、`/v1/send`、`/v1/sessions`、去重、限流与 `terminate()` 的进程内验收；`/v1/whisper` 已验证：无 context 时返回结构化 502，注入 context + 模拟 provider 后返回 200。未接入真实 LLM provider，`reply` 帧由测试脚本手工调用 `event.send()` 注入。完整 WebUI 安装、真实模型对话、真实碎碎念与主动消息禁用行为仍待有 provider 的 AstrBot 实例补验。
+
+2026-10-26 以 AstrBot `v4.23.2`、`v4.28.2` 源码为运行库重跑完整测试集，均为 `92 passed`；这两个版本尚未做真实实例的 WebUI 安装与真实模型联调。`4.23.2` 是 API 层面的下限：更早版本缺少 `on_agent_begin` / `on_agent_done` 钩子，插件会在导入阶段失败。
 
 ## 开发
 

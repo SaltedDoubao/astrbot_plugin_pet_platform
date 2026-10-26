@@ -77,7 +77,7 @@ class PetMessageEvent(AstrMessageEvent):
     ) -> None:
         """把流式结果整段回传。
 
-        AstrBot 4.29 基类 send_streaming 只上传指标、不消费生成器；
+        AstrBot 基类 send_streaming 默认只上传指标、不消费生成器；
         本平台不支持真实流式，必须自行聚合，否则回复会丢失。
         """
         parts: list[str] = []
