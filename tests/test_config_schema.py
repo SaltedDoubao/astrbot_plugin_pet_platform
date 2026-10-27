@@ -9,5 +9,5 @@ def test_conf_schema_has_required_fields():
     for key in ("token", "bind_host", "bind_port", "pet_ids", "event_buffer_size", "whisper_provider_id"):
         assert key in schema, key
     assert schema["token"]["secret"] is True
-    assert schema["bind_port"]["default"] == 6199
+    assert schema["bind_port"]["default"] == 16199
     assert schema["pet_ids"]["default"] == ["main"]

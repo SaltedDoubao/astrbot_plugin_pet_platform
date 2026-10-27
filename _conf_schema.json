@@ -11,7 +11,7 @@
   },
   "bind_port": {
     "type": "int",
-    "default": 6199,
+    "default": 16199,
     "description": "HTTP 监听端口"
   },
   "token": {

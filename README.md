@@ -44,7 +44,7 @@
 | `enable` | bool | `true` | 是否启用该平台实例 |
 | `token` | string | 空 | 桌宠访问令牌；留空时所有请求返回 401（fail closed） |
 | `bind_host` | string | `127.0.0.1` | HTTP 监听地址；默认只监听本机 |
-| `bind_port` | int | `6199` | HTTP 监听端口 |
+| `bind_port` | int | `16199` | HTTP 监听端口 |
 | `pet_ids` | list | `["main"]` | 允许的 `petId` 白名单；不在名单内返回 403 |
 | `event_buffer_size` | int | `256` | SSE 环形缓冲大小 |
 | `whisper_provider_id` | string | 空 | 碎碎念使用的 provider；留空回退当前会话 provider |
@@ -55,13 +55,15 @@
 | --- | --- | --- | --- |
 | `enabled` | bool | `true` | 启用 dsh_pet 平台 |
 | `bind_host` | string | `127.0.0.1` | HTTP 监听地址 |
-| `bind_port` | int | `6199` | HTTP 监听端口 |
+| `bind_port` | int | `16199` | HTTP 监听端口 |
 | `token` | string | 空（`secret: true`） | 桌宠访问令牌；留空拒绝所有请求 |
 | `pet_ids` | list | `["main"]` | 允许的 `petId` 白名单 |
 | `event_buffer_size` | int | `256` | SSE 环形缓冲大小 |
 | `whisper_provider_id` | string | 空 | 碎碎念使用的 provider；留空回退当前会话 provider |
 
 注意：HTTP 服务实际读取的是「平台」页保存的 `platform_config`；`_conf_schema.json` 是插件级设置 schema，两边字段含义一致。`event_buffer_size` 与 `whisper_provider_id` 已包含在平台的 `default_config_tmpl` 中，可直接在「平台」页配置。
+
+> 端口冲突：AstrBot Dashboard 默认 `6185`，但其他插件或自定义配置可能占用 `6199`。若 `16199` 也被占用，请在「平台」页改成其他空闲端口，并同步修改反向代理的 `proxy_pass`；只改插件级 schema 不会影响已运行的平台实例。
 
 > `token` 只是桌宠与本插件之间的桥接令牌，**不是** AstrBot OpenAPI、Dashboard 或 WebUI 的登录凭据，也不要与它们复用同一个值。
 
@@ -72,7 +74,7 @@
 ### 健康检查
 
 ```bash
-curl -H "Authorization: Bearer <token>" http://<host>:6199/v1/health
+curl -H "Authorization: Bearer <token>" http://<host>:16199/v1/health
 ```
 
 预期：HTTP 200
@@ -86,7 +88,7 @@ curl -H "Authorization: Bearer <token>" http://<host>:6199/v1/health
 ### 订阅事件
 
 ```bash
-curl -N -H "Authorization: Bearer <token>" "http://<host>:6199/v1/events?since=0"
+curl -N -H "Authorization: Bearer <token>" "http://<host>:16199/v1/events?since=0"
 ```
 
 预期：HTTP 200，`Content-Type: text/event-stream`。每帧格式：
@@ -106,7 +108,7 @@ data: {"event":"status","petId":"main","state":"thinking"}
 ```bash
 curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
   -d '{"petId":"main","requestId":"r1","text":"你好"}' \
-  http://<host>:6199/v1/send
+  http://<host>:16199/v1/send
 ```
 
 预期：HTTP 202
@@ -123,7 +125,7 @@ curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/js
 ```bash
 curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
   -d '{"petId":"main","requestId":"w1","systemPrompt":"你是猫","prompt":"说一句碎碎念"}' \
-  http://<host>:6199/v1/whisper
+  http://<host>:16199/v1/whisper
 ```
 
 预期：HTTP 200

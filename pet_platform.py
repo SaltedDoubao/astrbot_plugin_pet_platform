@@ -103,7 +103,7 @@ class PetMessageEvent(AstrMessageEvent):
         "enable": True,
         "token": "",
         "bind_host": "127.0.0.1",
-        "bind_port": 6199,
+        "bind_port": 16199,
         "pet_ids": ["main"],
         "event_buffer_size": 256,
         "whisper_provider_id": "",
@@ -204,7 +204,7 @@ class PetPlatform(Platform):
             site = web.TCPSite(
                 runner,
                 str(self.config.get("bind_host", "127.0.0.1")),
-                int(self.config.get("bind_port", 6199)),
+                int(self.config.get("bind_port", 16199)),
             )
             await site.start()
             # site.name 只含监听地址，不含令牌或消息内容。
